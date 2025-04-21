@@ -1,46 +1,87 @@
-import os, tempfile
+import os
 import PyPDF2
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from collections import Counter
+import tempfile
 
-def parse_resume(fp):
-    text = ''
+UPLOAD_FOLDER = './resumes'
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+def parse_resume(file_path):
+    """
+    Extracts text content from a resume file (PDF).
+    """
     try:
-        with open(fp, 'rb') as f:
-            reader = PyPDF2.PdfReader(f)
-            for p in reader.pages:
-                text += p.extract_text() or ''
+        text = ''
+        with open(file_path, 'rb') as f:
+            pdf_reader = PyPDF2.PdfReader(f)
+            for page in pdf_reader.pages:
+                text += page.extract_text()
+        return text
     except Exception as e:
-        print(f"Error reading {fp}: {e}")
-    return text
+        print(f"Error reading file {file_path}: {e}")
+        return ""
 
-def preprocess_and_vectorize(resume_texts, job_desc):
-    documents = resume_texts + [job_desc]
+def preprocess_and_vectorize(resume_texts, job_description):
+    """
+    Converts the text of resumes and job descriptions into TF-IDF vectors.
+    """
+    if not job_description.strip():
+        print("Job description is empty. Please provide valid input.")
+        return None, None
+
+    if not any(resume_texts):
+        print("No valid resume texts to process. Ensure the resumes are properly formatted.")
+        return None, None
+
+    documents = resume_texts + [job_description]
     vectorizer = TfidfVectorizer(stop_words='english')
-    tfidf_matrix = vectorizer.fit_transform(documents)
-    return tfidf_matrix
+    try:
+        tfidf_matrix = vectorizer.fit_transform(documents)
+        return tfidf_matrix, vectorizer
+    except Exception as e:
+        print(f"Error during TF-IDF vectorization: {e}")
+        return None, None
 
-def keyword_count_norm(text, keywords):
-    words = text.lower().split()
-    count = sum(words.count(k.lower()) for k in keywords)
-    return count / len(words) if words else 0
+def keyword_count_normalized(resume_text, job_keywords):
+    """
+    Counts the occurrences of job-related keywords in the resume text and normalizes by the total word count.
+    """
+    resume_words = resume_text.lower().split()
+    keyword_counts = Counter([word for word in resume_words if word in job_keywords])
+    total_keywords = sum(keyword_counts.values())
+    total_words = len(resume_words)
+    return total_keywords / total_words if total_words > 0 else 0
 
-def evaluate_resumes(paths, job_desc, keywords):
-    # Extract text from each resume
-    texts = [parse_resume(p) for p in paths]
-    # Vectorize resumes + job description
-    tfidf = preprocess_and_vectorize(texts, job_desc)
-    # Separate vectors
-    jd_vec = tfidf[-1]
-    res_vecs = tfidf[:-1]
-    # Cosine similarity
-    sims = cosine_similarity(res_vecs, jd_vec).flatten()
-    # Build scores list
-    scores = []
-    for i, txt in enumerate(texts):
-        kscore = keyword_count_norm(txt, keywords)
-        total = sims[i] * 0.7 + kscore * 0.3
-        scores.append((i, total * 100))
-    # Sort descending
-    return sorted(scores, key=lambda x: x[1], reverse=True)
+def calculate_scores(tfidf_matrix, num_resumes, job_keywords, resume_texts):
+    """
+    Calculates cosine similarity and normalized keyword frequency for resumes.
+    """
+    if tfidf_matrix is None:
+        print("TF-IDF matrix is None. Skipping scoring.")
+        return []
+
+    jd_vector = tfidf_matrix[-1]
+    resume_vectors = tfidf_matrix[:-1]
+    try:
+        similarity_scores = cosine_similarity(resume_vectors, jd_vector).flatten()
+        scores = []
+        for i, resume_text in enumerate(resume_texts):
+            keyword_score = keyword_count_normalized(resume_text, job_keywords)
+            total_score = (similarity_scores[i] * 0.7) + (keyword_score * 0.3)
+            scores.append((i, total_score * 100))
+        return sorted(scores, key=lambda x: x[1], reverse=True)
+    except Exception as e:
+        print(f"Error during score calculation: {e}")
+        return []
+
+def evaluate_resumes(resume_files, job_description, job_keywords):
+    """
+    Main function to evaluate resumes and return scores.
+    """
+    resume_texts = [parse_resume(file_path) for file_path in resume_files]
+    tfidf_matrix, vectorizer = preprocess_and_vectorize(resume_texts, job_description)
+    scores = calculate_scores(tfidf_matrix, len(resume_texts), job_keywords, resume_texts)
+
+    return scores
